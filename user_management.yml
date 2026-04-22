@@ -1,0 +1,151 @@
+---
+- name: User Management
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    test_users:
+      - name: testuser1
+        comment: "AAP Test User 1"
+        groups: wheel
+      - name: testuser2
+        comment: "AAP Test User 2"
+        groups: users
+    audit_min_uid: 1000
+
+  tasks:
+    - name: Display current user audit
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  USER MANAGEMENT - PRE-CHANGE AUDIT"
+          - "============================================"
+
+    - name: Get existing users (UID >= {{ audit_min_uid }})
+      ansible.builtin.shell: |
+        awk -F: '$3 >= {{ audit_min_uid }} {print $1, $3, $4, $6, $7}' /etc/passwd
+      register: existing_users
+      changed_when: false
+
+    - name: Display existing users
+      ansible.builtin.debug:
+        msg:
+          - "--- EXISTING USERS (UID >= {{ audit_min_uid }}) ---"
+          - "{{ existing_users.stdout_lines }}"
+
+    - name: Check password policy
+      ansible.builtin.shell: |
+        echo "PASS_MAX_DAYS: $(grep ^PASS_MAX_DAYS /etc/login.defs | awk '{print $2}')"
+        echo "PASS_MIN_DAYS: $(grep ^PASS_MIN_DAYS /etc/login.defs | awk '{print $2}')"
+        echo "PASS_MIN_LEN:  $(grep ^PASS_MIN_LEN /etc/login.defs | awk '{print $2}')"
+        echo "PASS_WARN_AGE: $(grep ^PASS_WARN_AGE /etc/login.defs | awk '{print $2}')"
+      register: password_policy
+      changed_when: false
+
+    - name: Display password policy
+      ansible.builtin.debug:
+        msg:
+          - "--- PASSWORD POLICY ---"
+          - "{{ password_policy.stdout_lines }}"
+
+    - name: Check for users with empty passwords
+      ansible.builtin.shell: "awk -F: '($2 == \"\" ) {print $1}' /etc/shadow"
+      register: empty_passwords
+      changed_when: false
+
+    - name: Report empty passwords
+      ansible.builtin.debug:
+        msg: "Users with empty passwords: {{ empty_passwords.stdout_lines | default(['None']) }}"
+
+    - name: Check sudo access
+      ansible.builtin.shell: "grep -v '^#' /etc/sudoers.d/* 2>/dev/null; grep -E '^[^#].*ALL' /etc/sudoers 2>/dev/null"
+      register: sudo_config
+      changed_when: false
+      failed_when: false
+
+    - name: Display sudo configuration
+      ansible.builtin.debug:
+        msg:
+          - "--- SUDO ACCESS ---"
+          - "{{ sudo_config.stdout_lines | default(['Default config']) }}"
+
+    - name: Create test users
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        comment: "{{ item.comment }}"
+        groups: "{{ item.groups }}"
+        append: true
+        shell: /bin/bash
+        create_home: true
+        state: present
+      loop: "{{ test_users }}"
+      register: user_creation
+
+    - name: Verify test users created
+      ansible.builtin.command: "id {{ item.name }}"
+      loop: "{{ test_users }}"
+      register: user_verify
+      changed_when: false
+
+    - name: Display created users
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ user_verify.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Set up SSH directory for test users
+      ansible.builtin.file:
+        path: "/home/{{ item.name }}/.ssh"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: "0700"
+      loop: "{{ test_users }}"
+
+    - name: Check login history for test users
+      ansible.builtin.command: "lastlog -u {{ item.name }}"
+      loop: "{{ test_users }}"
+      register: login_history
+      changed_when: false
+      failed_when: false
+
+    - name: Post-change audit
+      ansible.builtin.shell: |
+        awk -F: '$3 >= {{ audit_min_uid }} {print $1, $3, $4, $6, $7}' /etc/passwd
+      register: post_users
+      changed_when: false
+
+    - name: Display post-change user list
+      ansible.builtin.debug:
+        msg:
+          - "--- POST-CHANGE USERS (UID >= {{ audit_min_uid }}) ---"
+          - "{{ post_users.stdout_lines }}"
+
+    - name: Cleanup - remove test users
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        state: absent
+        remove: true
+      loop: "{{ test_users }}"
+
+    - name: Verify cleanup
+      ansible.builtin.command: "id {{ item.name }}"
+      loop: "{{ test_users }}"
+      register: cleanup_verify
+      changed_when: false
+      failed_when: false
+
+    - name: User Management Summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  USER MANAGEMENT SUMMARY"
+          - "============================================"
+          - "Users created:  {{ test_users | length }}"
+          - "Users removed:  {{ test_users | length }} (cleanup)"
+          - "Cleanup verify: {{ 'PASS' if cleanup_verify.results | map(attribute='rc') | select('eq', 1) | list | length == test_users | length else 'PARTIAL' }}"
+          - "Empty passwords:{{ empty_passwords.stdout_lines | length }} found"
+          - "Report Time:    {{ ansible_date_time.iso8601 }}"
+          - "============================================"

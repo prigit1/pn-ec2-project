@@ -1,0 +1,128 @@
+---
+- name: EC2 Lifecycle Management
+  hosts: all
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Get IMDS token
+      ansible.builtin.uri:
+        url: http://169.254.169.254/latest/api/token
+        method: PUT
+        headers:
+          X-aws-ec2-metadata-token-ttl-seconds: "21600"
+        return_content: true
+        timeout: 5
+      register: imds_token
+
+    - name: Gather EC2 instance metadata
+      ansible.builtin.uri:
+        url: "http://169.254.169.254/latest/meta-data/{{ item.key }}"
+        headers:
+          X-aws-ec2-metadata-token: "{{ imds_token.content }}"
+        return_content: true
+        timeout: 5
+      register: metadata
+      loop:
+        - { key: "instance-id", label: "Instance ID" }
+        - { key: "instance-type", label: "Instance Type" }
+        - { key: "ami-id", label: "AMI ID" }
+        - { key: "placement/availability-zone", label: "Availability Zone" }
+        - { key: "public-ipv4", label: "Public IP" }
+        - { key: "local-ipv4", label: "Private IP" }
+        - { key: "instance-life-cycle", label: "Lifecycle" }
+      loop_control:
+        label: "{{ item.label }}"
+      failed_when: false
+
+    - name: Display instance identity
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  EC2 INSTANCE LIFECYCLE REPORT"
+          - "============================================"
+          - "Instance ID:    {{ metadata.results[0].content | default('N/A') }}"
+          - "Instance Type:  {{ metadata.results[1].content | default('N/A') }}"
+          - "AMI ID:         {{ metadata.results[2].content | default('N/A') }}"
+          - "AZ:             {{ metadata.results[3].content | default('N/A') }}"
+          - "Public IP:      {{ metadata.results[4].content | default('N/A') }}"
+          - "Private IP:     {{ metadata.results[5].content | default('N/A') }}"
+          - "Lifecycle:      {{ metadata.results[6].content | default('on-demand') }}"
+
+    - name: Check system uptime
+      ansible.builtin.command: uptime -p
+      register: uptime_output
+      changed_when: false
+
+    - name: Check last reboot time
+      ansible.builtin.command: who -b
+      register: last_reboot
+      changed_when: false
+
+    - name: Get running processes count
+      ansible.builtin.command: ps aux --no-heading
+      register: process_list
+      changed_when: false
+
+    - name: Check system resource utilization
+      ansible.builtin.shell: |
+        echo "CPU_USAGE=$(top -bn1 | grep 'Cpu(s)' | awk '{print $2}')%"
+        echo "MEM_TOTAL={{ ansible_memtotal_mb }}MB"
+        echo "MEM_USED={{ ansible_memtotal_mb - ansible_memfree_mb }}MB"
+        echo "SWAP_USED={{ ansible_swaptotal_mb - ansible_swapfree_mb }}MB"
+        echo "LOAD_AVG=$(cat /proc/loadavg | awk '{print $1, $2, $3}')"
+      register: resource_util
+      changed_when: false
+
+    - name: Display lifecycle status
+      ansible.builtin.debug:
+        msg:
+          - "--- LIFECYCLE STATUS ---"
+          - "Uptime:         {{ uptime_output.stdout }}"
+          - "Last Reboot:    {{ last_reboot.stdout | trim }}"
+          - "Running Procs:  {{ process_list.stdout_lines | length }}"
+          - "{{ resource_util.stdout }}"
+
+    - name: Check if instance has IAM role
+      ansible.builtin.uri:
+        url: http://169.254.169.254/latest/meta-data/iam/security-credentials/
+        headers:
+          X-aws-ec2-metadata-token: "{{ imds_token.content }}"
+        return_content: true
+        timeout: 5
+      register: iam_role
+      failed_when: false
+
+    - name: Display IAM role info
+      ansible.builtin.debug:
+        msg: "IAM Role: {{ iam_role.content | default('No IAM role attached') }}"
+
+    - name: Verify instance is responsive (self-check)
+      ansible.builtin.wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: 22
+        timeout: 10
+      register: ssh_check
+
+    - name: Test DNS resolution
+      ansible.builtin.command: "nslookup {{ item }}"
+      loop:
+        - amazonaws.com
+        - google.com
+      register: dns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Lifecycle summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  LIFECYCLE SUMMARY"
+          - "============================================"
+          - "Instance:       {{ metadata.results[0].content | default('N/A') }} ({{ metadata.results[1].content | default('N/A') }})"
+          - "Status:         RUNNING"
+          - "SSH:            {{ 'RESPONSIVE' if ssh_check is succeeded else 'ISSUE' }}"
+          - "DNS:            {{ 'OK' if dns_check.results[0].rc == 0 else 'FAILED' }}"
+          - "IAM Role:       {{ iam_role.content | default('None') }}"
+          - "Report Time:    {{ ansible_date_time.iso8601 }}"
+          - "============================================"

@@ -1,0 +1,163 @@
+---
+- name: System Patching and Update Management
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    apply_patches: false
+    reboot_if_required: false
+
+  tasks:
+    - name: Display patching header
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  SYSTEM PATCHING REPORT"
+          - "============================================"
+          - "Host:           {{ ansible_hostname }}"
+          - "OS:             {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel:         {{ ansible_kernel }}"
+          - "Apply mode:     {{ 'APPLY' if apply_patches else 'DRY-RUN (audit only)' }}"
+          - "============================================"
+
+    - name: Check current subscription status
+      ansible.builtin.command: subscription-manager status
+      register: sub_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display subscription status
+      ansible.builtin.debug:
+        msg: "{{ sub_status.stdout_lines | default(['Subscription manager not available']) }}"
+
+    - name: Check enabled repositories
+      ansible.builtin.command: dnf repolist enabled
+      register: repo_list
+      changed_when: false
+
+    - name: Display enabled repos
+      ansible.builtin.debug:
+        msg:
+          - "--- ENABLED REPOSITORIES ---"
+          - "{{ repo_list.stdout_lines }}"
+
+    - name: Check all available updates
+      ansible.builtin.command: dnf check-update --quiet
+      register: all_updates
+      changed_when: false
+      failed_when: all_updates.rc not in [0, 100]
+
+    - name: Count available updates
+      ansible.builtin.set_fact:
+        update_count: "{{ all_updates.stdout_lines | select('match', '^\\S+') | list | length }}"
+      when: all_updates.rc == 100
+
+    - name: Set zero updates
+      ansible.builtin.set_fact:
+        update_count: "0"
+      when: all_updates.rc == 0
+
+    - name: Display available updates
+      ansible.builtin.debug:
+        msg:
+          - "--- AVAILABLE UPDATES: {{ update_count }} packages ---"
+          - "{{ all_updates.stdout_lines[:20] if all_updates.rc == 100 else ['System is up to date'] }}"
+          - "{{ '... and more (showing first 20)' if all_updates.rc == 100 and all_updates.stdout_lines | length > 20 else '' }}"
+
+    - name: Check security updates specifically
+      ansible.builtin.command: dnf check-update --security --quiet
+      register: security_updates
+      changed_when: false
+      failed_when: security_updates.rc not in [0, 100]
+
+    - name: Display security updates
+      ansible.builtin.debug:
+        msg:
+          - "--- SECURITY UPDATES ---"
+          - "{{ security_updates.stdout_lines if security_updates.rc == 100 else ['No security updates available'] }}"
+
+    - name: Check for kernel updates
+      ansible.builtin.command: dnf check-update kernel --quiet
+      register: kernel_updates
+      changed_when: false
+      failed_when: kernel_updates.rc not in [0, 100]
+
+    - name: Display kernel update status
+      ansible.builtin.debug:
+        msg: "Kernel update: {{ 'Available' if kernel_updates.rc == 100 else 'Current kernel is up to date' }}"
+
+    - name: Check last patching activity
+      ansible.builtin.command: dnf history list --reverse
+      register: dnf_history
+      changed_when: false
+
+    - name: Display recent patching history
+      ansible.builtin.debug:
+        msg:
+          - "--- RECENT PATCHING HISTORY ---"
+          - "{{ dnf_history.stdout_lines[:15] }}"
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_file
+
+    - name: Check needs-restarting (RHEL)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restart
+      changed_when: false
+      failed_when: false
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "Reboot required: {{ 'YES' if needs_restart.rc == 1 else 'NO' }}"
+
+    - name: Apply all updates (when enabled)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        security: true
+      register: patch_result
+      when: apply_patches | bool
+
+    - name: Display patch results
+      ansible.builtin.debug:
+        msg:
+          - "--- PATCH RESULTS ---"
+          - "Packages updated: {{ patch_result.results | default([]) | length }}"
+      when: apply_patches | bool
+
+    - name: Simulate patching (dry-run)
+      ansible.builtin.command: dnf update --assumeno
+      register: dry_run
+      changed_when: false
+      failed_when: false
+      when: not (apply_patches | bool)
+
+    - name: Display dry-run results
+      ansible.builtin.debug:
+        msg:
+          - "--- DRY-RUN RESULTS ---"
+          - "{{ dry_run.stdout_lines[-5:] | default(['No output']) }}"
+      when: not (apply_patches | bool)
+
+    - name: Verify system integrity post-check
+      ansible.builtin.command: rpm -Va --nomtime --nosize --nomd5
+      register: rpm_verify
+      changed_when: false
+      failed_when: false
+
+    - name: Patching Summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  PATCHING SUMMARY"
+          - "============================================"
+          - "Total updates:    {{ update_count }}"
+          - "Security updates: {{ 'Available' if security_updates.rc == 100 else 'None' }}"
+          - "Kernel update:    {{ 'Available' if kernel_updates.rc == 100 else 'Current' }}"
+          - "Reboot needed:    {{ 'YES' if needs_restart.rc | default(0) == 1 else 'NO' }}"
+          - "Mode:             {{ 'APPLIED' if apply_patches else 'DRY-RUN' }}"
+          - "Report Time:      {{ ansible_date_time.iso8601 }}"
+          - "============================================"

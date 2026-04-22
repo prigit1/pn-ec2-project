@@ -1,0 +1,192 @@
+---
+- name: S3 Operations Test
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    test_bucket_prefix: "aap-test"
+    test_file_content: "AAP S3 Operations Test - {{ ansible_date_time.iso8601 }}"
+    test_file_path: /tmp/aap_s3_test.txt
+    test_download_path: /tmp/aap_s3_download.txt
+
+  tasks:
+    - name: Check if AWS CLI is installed
+      ansible.builtin.command: aws --version
+      register: aws_cli_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install AWS CLI if not present
+      ansible.builtin.dnf:
+        name: awscli
+        state: present
+      when: aws_cli_check.rc != 0
+      failed_when: false
+      register: aws_install
+
+    - name: Recheck AWS CLI after install attempt
+      ansible.builtin.command: aws --version
+      register: aws_cli_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display AWS CLI status
+      ansible.builtin.debug:
+        msg: "AWS CLI: {{ aws_cli_version.stdout | default('Not available') }}"
+
+    - name: Check AWS credentials (IAM role or config)
+      ansible.builtin.command: aws sts get-caller-identity
+      register: aws_identity
+      changed_when: false
+      failed_when: false
+
+    - name: Display AWS identity
+      ansible.builtin.debug:
+        msg: "{{ aws_identity.stdout | default('No AWS credentials configured - skipping S3 operations') }}"
+
+    - name: Run S3 operations block
+      when: aws_identity.rc == 0
+      block:
+        - name: Create test file
+          ansible.builtin.copy:
+            content: |
+              ============================================
+              AAP S3 Operations Test Report
+              ============================================
+              Host:       {{ ansible_hostname }}
+              Instance:   {{ ansible_default_ipv4.address }}
+              Timestamp:  {{ ansible_date_time.iso8601 }}
+              OS:         {{ ansible_distribution }} {{ ansible_distribution_version }}
+              Test ID:    {{ 99999 | random }}
+              ============================================
+            dest: "{{ test_file_path }}"
+            mode: "0644"
+
+        - name: Get AWS account ID for bucket naming
+          ansible.builtin.shell: aws sts get-caller-identity --query Account --output text
+          register: aws_account_id
+          changed_when: false
+
+        - name: Set bucket name
+          ansible.builtin.set_fact:
+            test_bucket: "{{ test_bucket_prefix }}-{{ aws_account_id.stdout }}-{{ ansible_hostname }}"
+
+        - name: Check if test bucket exists
+          ansible.builtin.command: "aws s3api head-bucket --bucket {{ test_bucket }}"
+          register: bucket_check
+          changed_when: false
+          failed_when: false
+
+        - name: Create S3 test bucket
+          ansible.builtin.command: "aws s3 mb s3://{{ test_bucket }} --region us-east-1"
+          register: bucket_create
+          when: bucket_check.rc != 0
+          changed_when: bucket_create.rc == 0
+
+        - name: Upload test file to S3
+          ansible.builtin.command: "aws s3 cp {{ test_file_path }} s3://{{ test_bucket }}/test-reports/aap_test.txt"
+          register: s3_upload
+
+        - name: List objects in bucket
+          ansible.builtin.command: "aws s3 ls s3://{{ test_bucket }}/test-reports/ --recursive"
+          register: s3_list
+          changed_when: false
+
+        - name: Display uploaded objects
+          ansible.builtin.debug:
+            msg:
+              - "--- S3 BUCKET CONTENTS ---"
+              - "Bucket: {{ test_bucket }}"
+              - "{{ s3_list.stdout_lines }}"
+
+        - name: Download file from S3
+          ansible.builtin.command: "aws s3 cp s3://{{ test_bucket }}/test-reports/aap_test.txt {{ test_download_path }}"
+          register: s3_download
+
+        - name: Verify downloaded file
+          ansible.builtin.command: "cat {{ test_download_path }}"
+          register: downloaded_content
+          changed_when: false
+
+        - name: Validate file integrity
+          ansible.builtin.set_fact:
+            file_match: "{{ downloaded_content.stdout is search('AAP S3 Operations Test Report') }}"
+
+        - name: Display validation result
+          ansible.builtin.debug:
+            msg:
+              - "--- S3 VALIDATION ---"
+              - "Upload:     {{ 'SUCCESS' if s3_upload.rc == 0 else 'FAILED' }}"
+              - "Download:   {{ 'SUCCESS' if s3_download.rc == 0 else 'FAILED' }}"
+              - "Integrity:  {{ 'PASS' if file_match else 'FAIL' }}"
+
+        - name: Cleanup - remove test files from S3
+          ansible.builtin.command: "aws s3 rm s3://{{ test_bucket }}/test-reports/aap_test.txt"
+          register: s3_cleanup
+
+        - name: Cleanup - remove test bucket
+          ansible.builtin.command: "aws s3 rb s3://{{ test_bucket }}"
+          register: bucket_cleanup
+          failed_when: false
+
+        - name: Cleanup - remove local test files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ test_file_path }}"
+            - "{{ test_download_path }}"
+
+    - name: Simulate S3 operations (no AWS credentials)
+      when: aws_identity.rc != 0
+      block:
+        - name: Create simulated test file
+          ansible.builtin.copy:
+            content: |
+              AAP S3 Simulation Test
+              Host: {{ ansible_hostname }}
+              Time: {{ ansible_date_time.iso8601 }}
+            dest: "{{ test_file_path }}"
+            mode: "0644"
+
+        - name: Simulate file operations (local)
+          ansible.builtin.copy:
+            src: "{{ test_file_path }}"
+            dest: "{{ test_download_path }}"
+            remote_src: true
+            mode: "0644"
+
+        - name: Verify simulated transfer
+          ansible.builtin.stat:
+            path: "{{ test_download_path }}"
+          register: sim_file
+
+        - name: Cleanup simulated files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ test_file_path }}"
+            - "{{ test_download_path }}"
+
+        - name: Display simulation results
+          ansible.builtin.debug:
+            msg:
+              - "--- S3 SIMULATION (no AWS creds) ---"
+              - "File create:    PASS"
+              - "File transfer:  {{ 'PASS' if sim_file.stat.exists else 'FAIL' }}"
+              - "Cleanup:        PASS"
+              - "Note: Attach an IAM role to the EC2 instance for real S3 operations"
+
+    - name: S3 Operations Summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "  S3 OPERATIONS SUMMARY"
+          - "============================================"
+          - "AWS CLI:        {{ 'Installed' if aws_cli_version.rc == 0 else 'Not available' }}"
+          - "AWS Creds:      {{ 'Configured' if aws_identity.rc == 0 else 'Not configured (simulated mode)' }}"
+          - "Test Status:    COMPLETE"
+          - "Report Time:    {{ ansible_date_time.iso8601 }}"
+          - "============================================"
