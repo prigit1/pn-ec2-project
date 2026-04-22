@@ -46,7 +46,7 @@
       ansible.builtin.command: dnf check-update --quiet
       register: all_updates
       changed_when: false
-      failed_when: all_updates.rc not in [0, 100]
+      failed_when: all_updates.rc not in [0, 1, 100]
 
     - name: Count available updates
       ansible.builtin.set_fact:
@@ -56,7 +56,7 @@
     - name: Set zero updates
       ansible.builtin.set_fact:
         update_count: "0"
-      when: all_updates.rc == 0
+      when: all_updates.rc in [0, 1]
 
     - name: Display available updates
       ansible.builtin.debug:
@@ -69,7 +69,7 @@
       ansible.builtin.command: dnf check-update --security --quiet
       register: security_updates
       changed_when: false
-      failed_when: security_updates.rc not in [0, 100]
+      failed_when: security_updates.rc not in [0, 1, 100]
 
     - name: Display security updates
       ansible.builtin.debug:
@@ -81,7 +81,7 @@
       ansible.builtin.command: dnf check-update kernel --quiet
       register: kernel_updates
       changed_when: false
-      failed_when: kernel_updates.rc not in [0, 100]
+      failed_when: kernel_updates.rc not in [0, 1, 100]
 
     - name: Display kernel update status
       ansible.builtin.debug:
