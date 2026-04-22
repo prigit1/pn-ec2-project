@@ -1,0 +1,11 @@
+---
+- name: "FAIL TEST - Unreachable Host"
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Attempt to reach a non-existent host
+      ansible.builtin.command: echo "This should not run"
+      delegate_to: 10.99.99.99
+      vars:
+        ansible_ssh_timeout: 5

@@ -1,0 +1,31 @@
+---
+- name: "FAIL TEST - Assertion Failures (Threshold Breaches)"
+  hosts: all
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Assert hostname is something impossible
+      ansible.builtin.assert:
+        that:
+          - ansible_hostname == "this-host-does-not-exist"
+        fail_msg: "EXPECTED FAILURE: Hostname '{{ ansible_hostname }}' does not match expected value"
+        success_msg: "Hostname matches"
+
+    - name: Assert system has 1TB of RAM
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb > 1000000
+        fail_msg: "EXPECTED FAILURE: System only has {{ ansible_memtotal_mb }}MB RAM, expected >1TB"
+
+    - name: Assert disk usage is over 99%
+      ansible.builtin.assert:
+        that:
+          - ((ansible_mounts[0].size_total - ansible_mounts[0].size_available) / ansible_mounts[0].size_total * 100) > 99
+        fail_msg: "EXPECTED FAILURE: Disk usage is {{ ((ansible_mounts[0].size_total - ansible_mounts[0].size_available) / ansible_mounts[0].size_total * 100) | round(1) }}%, expected >99%"
+
+    - name: Assert OS is Windows
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Windows"
+        fail_msg: "EXPECTED FAILURE: OS is {{ ansible_os_family }}, not Windows"

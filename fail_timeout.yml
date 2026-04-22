@@ -1,0 +1,16 @@
+---
+- name: "FAIL TEST - Command Timeout"
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Run a command that takes too long
+      ansible.builtin.command: sleep 120
+      async: 10
+      poll: 2
+      register: timeout_result
+
+    - name: This should not execute
+      ansible.builtin.debug:
+        msg: "Should not reach here"

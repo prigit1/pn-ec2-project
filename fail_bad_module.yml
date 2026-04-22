@@ -1,0 +1,18 @@
+---
+- name: "FAIL TEST - Invalid Module and Bad Syntax"
+  hosts: all
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Step 1 - This succeeds
+      ansible.builtin.debug:
+        msg: "Step 1 OK"
+
+    - name: Step 2 - Call a module that does not exist
+      ansible.builtin.this_module_does_not_exist:
+        param: value
+
+    - name: Step 3 - This should never run
+      ansible.builtin.debug:
+        msg: "Step 3 - should not reach here"

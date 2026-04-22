@@ -1,0 +1,36 @@
+---
+- name: "FAIL TEST - Mixed Pass and Fail Scenarios"
+  hosts: all
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: "PASS - Gather system info"
+      ansible.builtin.debug:
+        msg: "Host {{ ansible_hostname }} running {{ ansible_distribution }}"
+
+    - name: "PASS - Check uptime"
+      ansible.builtin.command: uptime
+      register: uptime_out
+      changed_when: false
+
+    - name: "PASS - Display uptime"
+      ansible.builtin.debug:
+        msg: "{{ uptime_out.stdout }}"
+
+    - name: "PASS - Verify SSH is running"
+      ansible.builtin.systemd:
+        name: sshd
+      register: sshd_status
+
+    - name: "PASS - Check disk space"
+      ansible.builtin.command: df -h /
+      changed_when: false
+
+    - name: "FAIL - Execute invalid binary"
+      ansible.builtin.command: /usr/bin/this_binary_does_not_exist --check
+      register: bad_command
+
+    - name: "UNREACHABLE - Should never run"
+      ansible.builtin.debug:
+        msg: "This task should never execute"

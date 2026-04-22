@@ -1,0 +1,21 @@
+---
+- name: "FAIL TEST - Permission Denied (no become)"
+  hosts: all
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Try to read shadow file without privilege escalation
+      ansible.builtin.command: cat /etc/shadow
+      register: shadow_result
+
+    - name: Try to install a package without sudo
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+
+    - name: Try to write to a root-owned directory
+      ansible.builtin.copy:
+        content: "test"
+        dest: /etc/aap_fail_test.conf
+        mode: "0644"

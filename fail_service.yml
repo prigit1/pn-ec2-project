@@ -1,0 +1,20 @@
+---
+- name: "FAIL TEST - Service and File Failures"
+  hosts: all
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Try to start a service that does not exist
+      ansible.builtin.systemd:
+        name: aap_nonexistent_service_12345
+        state: started
+
+    - name: Try to read a file that does not exist
+      ansible.builtin.slurp:
+        src: /opt/this/path/absolutely/does/not/exist.conf
+      register: missing_file
+
+    - name: Try to template with undefined variable
+      ansible.builtin.debug:
+        msg: "The value is {{ this_variable_is_not_defined }}"
